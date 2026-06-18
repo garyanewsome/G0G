@@ -1,0 +1,57 @@
+# Prerequisites
+*.d
+
+# Compiled Object files
+*.slo
+*.lo
+*.o
+*.obj
+
+# Precompiled Headers
+*.gch
+*.pch
+
+# Compiled Dynamic libraries
+*.so
+*.dylib
+*.dll
+
+# Fortran modules
+*.mod
+*.smod
+
+# Schema files (OSX Templates and such)
+*.gdb
+*.ad
+
+# CMake files
+CMakeCache.txt
+CMakeFiles
+Makefile
+cmake_install.cmake
+install_manifest.txt
+compile_commands.json
+CTestTestfile.cmake
+
+# Build directories
+build/
+Builds/
+.cmake/
+
+# IDE files
+.vscode/
+.idea/
+*.suo
+*.user
+*.userossc
+*.sln
+*.vcxproj
+*.filters
+*.opensdf
+*.sdf
+*.VC.db
+*.VC.opendb
+
+# OS files
+.DS_Store
+Thumbs.db
