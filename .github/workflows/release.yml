@@ -1,0 +1,50 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-macos:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache JUCE checkout / build deps
+        uses: actions/cache@v4
+        with:
+          path: build/_deps
+          key: ${{ runner.os }}-juce-8.0.4-${{ hashFiles('CMakeLists.txt') }}
+
+      - name: Configure (universal x86_64 + arm64)
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build --config Release -j"$(sysctl -n hw.ncpu)"
+
+      - name: Verify universal binaries
+        run: |
+          set -e
+          for f in \
+            build/G0G_artefacts/VST3/G0G.vst3/Contents/MacOS/G0G \
+            build/G0G_artefacts/AU/G0G.component/Contents/MacOS/G0G \
+            build/G0G_artefacts/Standalone/G0G.app/Contents/MacOS/G0G; do
+            echo "== $f =="
+            lipo -info "$f" | grep -q "x86_64 arm64" || { echo "not universal: $f"; exit 1; }
+          done
+
+      - name: Package
+        run: |
+          cd build/G0G_artefacts
+          zip -r "${GITHUB_WORKSPACE}/G0G-macOS-universal.zip" VST3 AU Standalone
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: G0G-macOS-universal.zip
+          generate_release_notes: true
