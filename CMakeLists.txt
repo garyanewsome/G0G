@@ -1,4 +1,12 @@
 cmake_minimum_required(VERSION 3.22)
+
+# Build a universal binary (Intel + Apple Silicon) on macOS. This must be set
+# before project() — CMake locks in the target architecture(s) at that point,
+# so setting it later has no effect on macOS.
+if(APPLE AND NOT CMAKE_OSX_ARCHITECTURES)
+    set(CMAKE_OSX_ARCHITECTURES "x86_64;arm64" CACHE STRING "Build architectures for macOS" FORCE)
+endif()
+
 project(G0G VERSION 1.0.0 LANGUAGES C CXX OBJC OBJCXX)
 
 set(CMAKE_CXX_STANDARD 17)
@@ -23,7 +31,9 @@ FetchContent_MakeAvailable(JUCE)
 # Add the G0G audio plugin target
 juce_add_plugin(G0G
     VERSION "1.0.0"
-    COMPANY_NAME "Antigravity"
+    COMPANY_NAME "garyanewsome"
+    COMPANY_COPYRIGHT "Gary A. Newsome"
+    BUNDLE_ID "com.garyanewsome.G0G"
     IS_SYNTH TRUE
     NEEDS_MIDI_INPUT TRUE
     NEEDS_MIDI_OUTPUT FALSE
