@@ -22,30 +22,31 @@ jobs:
           key: ${{ runner.os }}-juce-8.0.4-${{ hashFiles('CMakeLists.txt') }}
 
       - name: Configure (universal x86_64 + arm64)
-        # Force Unix Makefiles: without an explicit generator, CMake on this
-        # runner picks a multi-config generator (Xcode), which nests output
-        # under an extra build/G0G_artefacts/Release/ folder. Forcing this
-        # single-config generator keeps the artefact layout matching local
-        # dev builds, which the paths below (and Package) assume.
+        # Pin the generator so the build layout is deterministic across
+        # machines/runners regardless of what CMake would otherwise pick.
         run: cmake -S . -B build -G "Unix Makefiles" -DCMAKE_BUILD_TYPE=Release
 
       - name: Build
         run: cmake --build build --config Release -j"$(sysctl -n hw.ncpu)"
 
+      # JUCE's CMake support always appends $<CONFIG> to its output path
+      # (see JUCEUtils.cmake: `products_folder = base_folder/$<CONFIG>`).
+      # With CMAKE_BUILD_TYPE=Release set above, that means every artefact
+      # lands under an extra .../Release/ folder - hence the path below.
       - name: Verify universal binaries
         run: |
           set -e
           for f in \
-            build/G0G_artefacts/VST3/G0G.vst3/Contents/MacOS/G0G \
-            build/G0G_artefacts/AU/G0G.component/Contents/MacOS/G0G \
-            build/G0G_artefacts/Standalone/G0G.app/Contents/MacOS/G0G; do
+            build/G0G_artefacts/Release/VST3/G0G.vst3/Contents/MacOS/G0G \
+            build/G0G_artefacts/Release/AU/G0G.component/Contents/MacOS/G0G \
+            build/G0G_artefacts/Release/Standalone/G0G.app/Contents/MacOS/G0G; do
             echo "== $f =="
             lipo -info "$f" | grep -q "x86_64 arm64" || { echo "not universal: $f"; exit 1; }
           done
 
       - name: Package
         run: |
-          cd build/G0G_artefacts
+          cd build/G0G_artefacts/Release
           zip -r "${GITHUB_WORKSPACE}/G0G-macOS-universal.zip" VST3 AU Standalone
 
       - name: Create release
