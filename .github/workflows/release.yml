@@ -22,7 +22,12 @@ jobs:
           key: ${{ runner.os }}-juce-8.0.4-${{ hashFiles('CMakeLists.txt') }}
 
       - name: Configure (universal x86_64 + arm64)
-        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+        # Force Unix Makefiles: without an explicit generator, CMake on this
+        # runner picks a multi-config generator (Xcode), which nests output
+        # under an extra build/G0G_artefacts/Release/ folder. Forcing this
+        # single-config generator keeps the artefact layout matching local
+        # dev builds, which the paths below (and Package) assume.
+        run: cmake -S . -B build -G "Unix Makefiles" -DCMAKE_BUILD_TYPE=Release
 
       - name: Build
         run: cmake --build build --config Release -j"$(sysctl -n hw.ncpu)"
