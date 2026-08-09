@@ -31,7 +31,7 @@ FetchContent_MakeAvailable(JUCE)
 # Add the G0G audio plugin target
 juce_add_plugin(G0G
     VERSION "1.0.0"
-    COMPANY_NAME "garyanewsome"
+    COMPANY_NAME "Gary A. Newsome"
     COMPANY_COPYRIGHT "Gary A. Newsome"
     BUNDLE_ID "com.garyanewsome.G0G"
     IS_SYNTH TRUE
