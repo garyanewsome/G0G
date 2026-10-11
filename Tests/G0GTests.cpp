@@ -435,6 +435,24 @@ int main(int argc, char** argv) {
         check(std::abs(ratio - 0.5) < 0.03, "100% sensitivity: half velocity is half level (" + juce::String(ratio, 2) + ")");
     }
 
+
+    {
+        std::cout << "[13] The selected preset name survives saving and restoring plugin state\n";
+        G0GAudioProcessor a;
+        a.setPlayConfigDetails(0, 2, 48000.0, 512);
+        a.prepareToPlay(48000.0, 512);
+        a.setCurrentProgram(2);                         // host program change remembers the name
+        const juce::String expected = a.getProgramName(2);
+        check(a.apvts.state.getProperty("presetName").toString() == expected, "program change records the name (" + expected + ")");
+        juce::MemoryBlock blob;
+        a.getStateInformation(blob);
+        G0GAudioProcessor b;
+        b.setPlayConfigDetails(0, 2, 48000.0, 512);
+        b.prepareToPlay(48000.0, 512);
+        b.setStateInformation(blob.getData(), (int) blob.getSize());
+        check(b.apvts.state.getProperty("presetName").toString() == expected, "name is restored with the state");
+    }
+
     {
         std::cout << "[8] CPU cost (informational, one core, this machine)\n";
         auto measure = [&](float mode, float gain, const char* label) {

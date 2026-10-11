@@ -78,6 +78,7 @@ void G0GAudioProcessor::setCurrentProgram(int index) {
         return;
     currentProgram = index;
     Presets::applyFactory(*this, index);
+    apvts.state.setProperty("presetName", Presets::factory()[static_cast<size_t>(index)].name, nullptr);
 }
 
 const juce::String G0GAudioProcessor::getProgramName(int index) {
