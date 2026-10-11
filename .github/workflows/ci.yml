@@ -79,8 +79,24 @@ jobs:
           cd build/G0G_artefacts/Release
           zip -r "${GITHUB_WORKSPACE}/G0G-macOS-universal.zip" VST3 AU Standalone
 
+      - name: Build installer disk image
+        # Double-click installer + uninstaller for non-technical users.
+        # Unsigned unless Developer ID secrets are added (see installer/).
+        env:
+          DESCRIPTION: a monophonic 808 bass synthesizer
+        run: ./installer/build_installer.sh build/G0G_artefacts/Release
+
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
-          files: G0G-macOS-universal.zip
+          files: |
+            G0G-macOS-universal.zip
+            dist/G0G-*-macOS.dmg
           generate_release_notes: true
+          body: |
+            **Easiest install:** download the `.dmg`, open it, and double-click *Install G0G.pkg*.
+            The installer is not yet signed with an Apple developer certificate, so macOS will ask
+            you to approve it once - the steps are in *READ ME FIRST.txt* inside the disk image.
+            The `.zip` is the raw VST3 / AU / Standalone bundles for manual installs.
+
+            Requires macOS 14 or newer. Universal: Intel and Apple Silicon.

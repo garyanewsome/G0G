@@ -72,18 +72,60 @@ $$H(z) = \text{SVF\_LPF}(X(z), f_{\text{cutoff}})$$
 
 ---
 
-## Implementation Outline (JUCE Architecture)
+## Controls
 
-### 1. Audio Processing Block (`PluginProcessor.cpp`)
-* Maintain a `juce::Synthesiser` subclass configured strictly for a single, monophonic voice.
-* Implement sample-rate tracking to ensure the glide rate coefficient and pitch-drop envelopes remain completely independent of the DAW's operating buffer size.
-* Manage parameter smoothing via `juce::LinearSmoothedValue` to prevent audible digital clicks during high-drive parameter automation.
+| Panel | Control | What it does |
+|---|---|---|
+| SUB | MORPH | Sub waveform: sine, triangle, square |
+| GLIDE | TIME / CURVE | Portamento time and shape (linear to exponential) |
+| PUNCH | DEPTH / SPEED | Starting pitch offset (semitones) and how fast it drops |
+| AMP | HOLD / DECAY / SHAPE | AHD amplitude envelope and its decay curve |
+| CLICK | TYPE / LEVEL | Noise burst on each note (off, white, pink) |
+| DRIVE | MODE / AMOUNT | Tube, clip or foldback saturation (2x oversampled) |
+| FILTER | CUTOFF / SWEEP / SPEED | Post-drive low-pass, plus its envelope depth and decay |
+| OUT | VOL | Master level (dB) |
+| PERF | PITCH / MOD | Pitch wheel (+/-2 semitones) and mod wheel (opens the filter by up to 4 kHz) |
 
-### 2. User Interface View (`PluginEditor.cpp`)
-* Clean visualizer panel rendering the AHD amplitude curve alongside a visual slider for the glide time parameter.
-* Standardized rotary sliders mapping to Drive, Cutoff, Transient Click Level, and Glide Speed.
+Hover any control title for a plain-English definition. Seven factory presets
+(Classic 808, Long Boom, Distorted 808, Trap Slide, Short Kick, Foldback Growl,
+Pure Sub) are also exposed to the host as programs; your own presets are saved
+as `.g0gpreset` files in `~/Library/Application Support/G0G/Presets/`.
+
+## Implementation Notes (JUCE Architecture)
+
+### 1. Audio Processing (`PluginProcessor.cpp`)
+* A single monophonic voice: `GlideUnit` -> `SubEngine` + `ClickEngine` -> `SaturationCore` -> SVF low-pass.
+* MIDI is applied at its exact sample position; control updates (drive, filter, gain) run in 64-sample chunks, so output does not depend on the host buffer size.
+* The filter envelope advances per sample; the cutoff is `base + envelope + mod wheel`.
+* Velocity is normalised 0..1.
+* Drive runs through a 2x polyphase IIR oversampler (reported as plugin latency) and is skipped entirely when bypassed.
+* Parameter handles are cached; smoothers are primed on the first block to avoid a fade-in.
+
+### 2. User Interface (`PluginEditor.cpp`, `G0GLookAndFeel.h`)
+* Sectioned, resizable (aspect-locked) panels in a black-and-red scheme, with metal knobs, ribbed performance wheels and hover tooltips.
+* The AHD / filter-envelope visualizer shows live playheads for the active note.
+* `Presets.h` holds factory presets and user preset save/load.
+
+## Tests
+
+Headless engine tests (output sanity, sample-accurate MIDI, filter-envelope
+timing, block-size independence, pitch/mod wheel, presets, CPU cost):
+
+```bash
+cmake -B cmake-build -DCMAKE_BUILD_TYPE=Release
+cmake --build cmake-build --target G0GTests
+./cmake-build/G0GTests_artefacts/Release/G0GTests
+```
+
+## Install / Uninstall (macOS)
+
+`installer/build_installer.sh` builds `dist/G0G-<version>-macOS.dmg` containing
+a double-click installer package (VST3 + AU + standalone app), an *Uninstall
+G0G* app, and a plain-language READ ME FIRST. It is unsigned by default;
+Developer ID signing and notarization switch on via environment variables
+(see the script header). Release tags attach the DMG automatically.
 
 ## Compilation Requirements
 * **C++ Standard:** C++17 or higher
-* **Framework:** JUCE 7.x+ (Audio-Plugin Template)
-* **Target Architectures:** VST3, AU, Standalone Application
+* **Framework:** JUCE 8.0.4 (fetched by CMake)
+* **Targets:** VST3, AU, Standalone; universal macOS binary (Intel + Apple Silicon), macOS 14+
