@@ -11,6 +11,7 @@
 
 #include "PluginProcessor.h"
 #include "GlideUnit.h"
+#include "PluginEditor.h"
 
 namespace {
 
@@ -109,9 +110,30 @@ double inharmonicDb(const std::vector<float>& x, int from, double f0, double sam
 }
 } // namespace
 
-int main() {
+int main(int argc, char** argv) {
     juce::ScopedJuceInitialiser_GUI juceInit;
     constexpr double sr = 48000.0;
+
+    // UI snapshot tool: G0GTests --snapshot out.png [scale]
+    // Renders the editor offscreen, so the layout can be checked without
+    // launching the app or finding its window.
+    if (argc >= 3 && juce::String(argv[1]) == "--snapshot") {
+        G0GAudioProcessor proc;
+        proc.setPlayConfigDetails(0, 2, sr, 512);
+        proc.prepareToPlay(sr, 512);
+        std::unique_ptr<juce::AudioProcessorEditor> editor(proc.createEditor());
+        const float scale = argc >= 4 ? juce::String(argv[3]).getFloatValue() : 1.0f;
+        editor->setVisible(true);
+        auto image = editor->createComponentSnapshot(editor->getLocalBounds(), true, scale);
+        juce::File out(argv[2]);
+        out.deleteFile();
+        juce::FileOutputStream stream(out);
+        juce::PNGImageFormat png;
+        const bool ok = stream.openedOk() && png.writeImageToStream(image, stream);
+        std::cout << (ok ? "wrote " : "FAILED ") << out.getFullPathName() << " ("
+                  << editor->getWidth() << "x" << editor->getHeight() << ")\n";
+        return ok ? 0 : 1;
+    }
 
     std::cout << "G0G engine tests\n";
 
