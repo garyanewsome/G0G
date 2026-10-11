@@ -5,9 +5,10 @@
 #     Uninstall <Product>.app   (double-click uninstaller)
 #     READ ME FIRST.txt
 #
-# The product name and version come from CMakeLists.txt:
-#   project(<Product> VERSION x.y.z ...)
-# and the JUCE products are expected at <artefacts>/{VST3,AU,Standalone}.
+# Names come from CMakeLists.txt:
+#   project(<Target> VERSION x.y.z ...)      CMake target + artefact folder
+#   PRODUCT_NAME "<Product>"                 bundle / display name (defaults to the target)
+# and the JUCE products are expected at <Target>_artefacts/Release/{VST3,AU,Standalone}.
 #
 # Usage: installer/build_installer.sh [path/to/<Product>_artefacts/Release]
 #   env: DESCRIPTION  one-line description used on the installer welcome page
@@ -22,18 +23,20 @@ set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"
 
-PRODUCT="$(sed -n 's/^project(\([A-Za-z0-9_]*\) VERSION [0-9.]*.*/\1/p' "$ROOT/CMakeLists.txt" | head -1)"
+TARGET="$(sed -n 's/^project(\([A-Za-z0-9_]*\) VERSION [0-9.]*.*/\1/p' "$ROOT/CMakeLists.txt" | head -1)"
 VERSION="$(sed -n 's/^project([A-Za-z0-9_]* VERSION \([0-9.]*\).*/\1/p' "$ROOT/CMakeLists.txt" | head -1)"
-[ -n "$PRODUCT" ] && [ -n "$VERSION" ] || { echo "could not read project() from CMakeLists.txt" >&2; exit 1; }
+[ -n "$TARGET" ] && [ -n "$VERSION" ] || { echo "could not read project() from CMakeLists.txt" >&2; exit 1; }
+PRODUCT="$(sed -n 's/^[[:space:]]*PRODUCT_NAME "\(.*\)".*/\1/p' "$ROOT/CMakeLists.txt" | head -1)"
+PRODUCT="${PRODUCT:-$TARGET}"
 
 BUNDLE_PREFIX="${BUNDLE_PREFIX:-com.garyanewsome}"
 DESCRIPTION="${DESCRIPTION:-a software synthesizer plugin}"
-ART="${1:-$ROOT/cmake-build/${PRODUCT}_artefacts/Release}"
+ART="${1:-$ROOT/cmake-build/${TARGET}_artefacts/Release}"
 OUT="$ROOT/dist"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
-PKG_ID="$BUNDLE_PREFIX.$PRODUCT.pkg"
+PKG_ID="$BUNDLE_PREFIX.$TARGET.pkg"
 
 for b in "VST3/$PRODUCT.vst3" "AU/$PRODUCT.component" "Standalone/$PRODUCT.app"; do
   [ -d "$ART/$b" ] || { echo "missing build artefact: $ART/$b" >&2; exit 1; }
@@ -45,7 +48,7 @@ TPL="$WORK/tpl"
 mkdir -p "$TPL"
 cp -R "$HERE/scripts" "$HERE/resources" "$HERE/uninstall.sh" "$HERE/Uninstall.applescript" "$TPL/"
 find "$TPL" -type f \( -name '*.txt' -o -name '*.sh' -o -name '*.applescript' -o -name 'postinstall' \) -print0 |
-  xargs -0 sed -i '' -e "s|@PRODUCT@|$PRODUCT|g" -e "s|@BUNDLE_PREFIX@|$BUNDLE_PREFIX|g" -e "s|@DESCRIPTION@|$DESCRIPTION|g"
+  xargs -0 sed -i '' -e "s|@PRODUCT@|$PRODUCT|g" -e "s|@TARGET@|$TARGET|g" -e "s|@BUNDLE_PREFIX@|$BUNDLE_PREFIX|g" -e "s|@DESCRIPTION@|$DESCRIPTION|g"
 chmod +x "$TPL/uninstall.sh" "$TPL/scripts/postinstall"
 
 # --- payload -----------------------------------------------------------

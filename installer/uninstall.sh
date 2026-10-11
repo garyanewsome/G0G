@@ -29,7 +29,7 @@ done
 
 # Forget the installer receipt so macOS no longer thinks it is installed.
 if [ -z "$PREFIX" ]; then
-  /usr/sbin/pkgutil --forget @BUNDLE_PREFIX@.@PRODUCT@.pkg >/dev/null 2>&1 || true
+  /usr/sbin/pkgutil --forget @BUNDLE_PREFIX@.@TARGET@.pkg >/dev/null 2>&1 || true
   # Make music apps notice the AU is gone.
   /usr/bin/killall -9 AudioComponentRegistrar >/dev/null 2>&1 || true
 fi
