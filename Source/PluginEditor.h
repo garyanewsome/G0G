@@ -60,10 +60,10 @@ private:
     Knob morph, tune, fineTune, glideTime, glideCurve, pitchDepth, pitchDecay, hold, decay,
          decayCurve, release;
     // Click / drive
-    Choice clickType, driveMode, gateMode, legatoMode;
+    Choice clickType, driveMode, gateMode, legatoMode, quality;
     Knob clickLevel, driveGain;
     // Filter / master
-    Knob cutoff, filterEnvDepth, filterEnvDecay, masterVol;
+    Knob cutoff, filterEnvDepth, filterEnvDecay, masterVol, velSens;
     // Performance wheels
     Knob pitchWheel, modWheel;
 

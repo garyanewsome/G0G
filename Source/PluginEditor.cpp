@@ -3,7 +3,7 @@
 #include "Presets.h"
 
 namespace {
-constexpr int kBaseWidth = 1260;
+constexpr int kBaseWidth = 1320;
 constexpr int kBaseHeight = 470;
 constexpr int kHeaderHeight = 58;
 constexpr int kVisualizerHeight = 162;
@@ -153,6 +153,14 @@ G0GAudioProcessorEditor::G0GAudioProcessorEditor(G0GAudioProcessor& p)
     filterEnvDecay.slider.valueFromTextFunction = timeFromText;
 
     // ---- Output
+    addChoice(quality, "quality", juce::StringArray("2X", "4X"),
+              "Drive quality: 4X cleans up harsh digital fizz at high drive "
+              "(especially FOLD) for a small extra CPU cost.");
+    addKnob(velSens, "vel_sens", "VEL",
+            "Velocity sensitivity: 0% plays every note at full level like a "
+            "real 808; 100% lets how hard you hit the key set the level.");
+    velSens.slider.textFromValueFunction = percentText;
+    velSens.slider.valueFromTextFunction = percentFromText;
     addKnob(masterVol, "master_volume", "VOL", "Master output level in decibels.");
     masterVol.slider.textFromValueFunction = [](double v) { return juce::String(v, 1) + " dB"; };
 
@@ -187,7 +195,7 @@ G0GAudioProcessorEditor::G0GAudioProcessorEditor(G0GAudioProcessor& p)
     modWheel.slider.setValue(audioProcessor.modWheel.load(), juce::dontSendNotification);
 
     // Formatters were assigned after the attachments, so refresh the read-outs.
-    for (auto* k : {&morph, &tune, &fineTune, &release, &glideTime, &glideCurve, &pitchDepth, &pitchDecay, &hold, &decay,
+    for (auto* k : {&velSens, &morph, &tune, &fineTune, &release, &glideTime, &glideCurve, &pitchDepth, &pitchDecay, &hold, &decay,
                     &decayCurve, &clickLevel, &driveGain, &cutoff, &filterEnvDepth,
                     &filterEnvDecay, &masterVol})
         k->slider.updateText();
@@ -202,7 +210,7 @@ G0GAudioProcessorEditor::G0GAudioProcessorEditor(G0GAudioProcessor& p)
         {"CLICK",  &clickType,   {&clickLevel}, 1.7f, {}},
         {"DRIVE",  &driveMode,   {&driveGain}, 1.7f, {}},
         {"FILTER", nullptr,      {&cutoff, &filterEnvDepth, &filterEnvDecay}, 1.0f, {}},
-        {"OUT",    nullptr,      {&masterVol}, 1.0f, {}},
+        {"OUT",    &quality,     {&velSens, &masterVol}, 1.0f, {}},
     };
 
     // ---- Preset browser

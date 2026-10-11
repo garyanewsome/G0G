@@ -39,6 +39,8 @@ G0GAudioProcessor::G0GAudioProcessor()
     params.legato         = apvts.getRawParameterValue("legato");
     params.tune           = apvts.getRawParameterValue("tune");
     params.fineTune       = apvts.getRawParameterValue("fine_tune");
+    params.velSens        = apvts.getRawParameterValue("vel_sens");
+    params.quality        = apvts.getRawParameterValue("quality");
 }
 
 G0GAudioProcessor::~G0GAudioProcessor() = default;
@@ -104,11 +106,14 @@ void G0GAudioProcessor::prepareToPlay(double sampleRate, int samplesPerBlock) {
     lowCutFilter.setType(juce::dsp::StateVariableTPTFilterType::highpass);
     lowCutFilter.setCutoffFrequency(20.0f);
 
-    // 2x oversampled drive (polyphase half-band IIR, low latency).
-    oversampling = std::make_unique<juce::dsp::Oversampling<float>>(
+    // Oversampled drive: 2x (normal) or 4x (high), polyphase half-band IIR.
+    oversampling2x = std::make_unique<juce::dsp::Oversampling<float>>(
         2, 1, juce::dsp::Oversampling<float>::filterHalfBandPolyphaseIIR, true, false);
-    oversampling->initProcessing(static_cast<size_t>(kChunk));
-    setLatencySamples(juce::roundToInt(oversampling->getLatencyInSamples()));
+    oversampling4x = std::make_unique<juce::dsp::Oversampling<float>>(
+        2, 2, juce::dsp::Oversampling<float>::filterHalfBandPolyphaseIIR, true, false);
+    oversampling2x->initProcessing(static_cast<size_t>(kChunk));
+    oversampling4x->initProcessing(static_cast<size_t>(kChunk));
+    activeQuality = -1;   // chosen (and latency reported) on the first block
 
     smoothedMasterVol.reset(sampleRate, 0.05);
     smoothedCutoff.reset(sampleRate, 0.05);
@@ -152,6 +157,18 @@ void G0GAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::Mid
     const int clickTypeVal = static_cast<int>(params.clickType->load());
     const auto driveMode = static_cast<SaturationCore::Mode>(static_cast<int>(params.driveMode->load()));
 
+    // Drive quality: 2x or 4x. Reset the newly chosen oversampler's filters
+    // when it changes and report the matching latency.
+    const int quality = params.quality->load() > 0.5f ? 1 : 0;
+    if (quality != activeQuality) {
+        auto& os = quality == 1 ? *oversampling4x : *oversampling2x;
+        os.reset();
+        setLatencySamples(juce::roundToInt(os.getLatencyInSamples()));
+        activeQuality = quality;
+    }
+    auto& oversampling = quality == 1 ? *oversampling4x : *oversampling2x;
+    const float velSens = params.velSens->load();
+
     const float masterTarget = juce::Decibels::decibelsToGain(params.masterVol->load());
     if (!smoothersPrimed) {
         // First block: start at the stored values instead of ramping from 0.
@@ -191,7 +208,10 @@ void G0GAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::Mid
                     const bool slurred = legatoMode && glideUnit.isAnyNoteHeld() && subEngine.isActive();
                     glideUnit.noteOn(msg.getNoteNumber(), msg.getFloatVelocity());
                     if (!slurred) {
-                        subEngine.trigger(msg.getFloatVelocity(), true);
+                        // Velocity sensitivity: 0 = every hit full level (like
+                        // a real 808), 1 = level follows velocity.
+                        const float vel = 1.0f - velSens * (1.0f - msg.getFloatVelocity());
+                        subEngine.trigger(vel, true);
                         clickEngine.trigger(clickTypeVal);
                     }
                 } else if (msg.isNoteOff()) {
@@ -229,10 +249,10 @@ void G0GAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::Mid
         if (driveMode != SaturationCore::Mode::Bypass && drive > 1.001f) {
             float* chans[2] = { left + chunkStart, right + chunkStart };
             juce::dsp::AudioBlock<float> chunkBlock(chans, 2, static_cast<size_t>(n));
-            auto upBlock = oversampling->processSamplesUp(chunkBlock);
+            auto upBlock = oversampling.processSamplesUp(chunkBlock);
             saturationCore.process(upBlock.getChannelPointer(0), upBlock.getChannelPointer(1),
                                    static_cast<int>(upBlock.getNumSamples()), driveMode, drive);
-            oversampling->processSamplesDown(chunkBlock);
+            oversampling.processSamplesDown(chunkBlock);
         }
 
         // Post-drive low-pass: cutoff = base + envelope + mod wheel, per sample.
@@ -335,6 +355,12 @@ juce::AudioProcessorValueTreeState::ParameterLayout G0GAudioProcessor::createPar
         juce::ParameterID("tune", 1), "Tune (st)", juce::NormalisableRange<float>(-24.0f, 24.0f, 1.0f), 0.0f));
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
         juce::ParameterID("fine_tune", 1), "Fine Tune (ct)", juce::NormalisableRange<float>(-100.0f, 100.0f, 1.0f), 0.0f));
+
+    // 6c. Velocity sensitivity, drive quality
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID("vel_sens", 1), "Velocity Sensitivity", 0.0f, 1.0f, 1.0f));
+    params.push_back(std::make_unique<juce::AudioParameterChoice>(
+        juce::ParameterID("quality", 1), "Drive Quality", juce::StringArray("2x", "4x"), 0));
 
     // 7. Master Volume
     params.push_back(std::make_unique<juce::AudioParameterFloat>(

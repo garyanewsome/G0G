@@ -88,10 +88,13 @@ private:
         std::atomic<float>* legato = nullptr;     // 0 retrigger, 1 legato
         std::atomic<float>* tune = nullptr;       // semitones
         std::atomic<float>* fineTune = nullptr;   // cents
+        std::atomic<float>* velSens = nullptr;    // 0..1
+        std::atomic<float>* quality = nullptr;    // 0 = 2x, 1 = 4x oversampling
     } params;
 
     // Drive runs oversampled to keep clip/foldback aliasing out of the audio.
-    std::unique_ptr<juce::dsp::Oversampling<float>> oversampling;
+    std::unique_ptr<juce::dsp::Oversampling<float>> oversampling2x, oversampling4x;
+    int activeQuality = -1;
     bool smoothersPrimed = false;
     float bendSmoothed = 0.0f;
     int currentProgram = 0;

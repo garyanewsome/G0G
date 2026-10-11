@@ -84,6 +84,29 @@ int zeroCrossings(const std::vector<float>& x, int from, int to) {
     return n;
 }
 
+
+// Fraction of spectral energy that is NOT at a harmonic of f0 (i.e. aliasing
+// and other inharmonic junk), in dB. Hann window, 32768-point FFT.
+double inharmonicDb(const std::vector<float>& x, int from, double f0, double sampleRate) {
+    constexpr int order = 15, N = 1 << order;
+    juce::dsp::FFT fft(order);
+    std::vector<float> buf((size_t) N * 2, 0.0f);
+    for (int i = 0; i < N; ++i) {
+        const float w = 0.5f - 0.5f * std::cos(2.0f * juce::MathConstants<float>::pi * (float) i / (float) (N - 1));
+        buf[(size_t) i] = x[(size_t) (from + i)] * w;
+    }
+    fft.performFrequencyOnlyForwardTransform(buf.data());
+    const double binHz = sampleRate / N;
+    double total = 0.0, harmonic = 0.0;
+    for (int k = 2; k < N / 2; ++k) {
+        const double p = (double) buf[(size_t) k] * buf[(size_t) k];
+        total += p;
+        const double h = (k * binHz) / f0;
+        if (std::abs(h - std::round(h)) * f0 / binHz <= 4.0 && std::round(h) >= 1.0)
+            harmonic += p;
+    }
+    return 10.0 * std::log10(std::max(1e-18, (total - harmonic) / std::max(1e-18, total)));
+}
 } // namespace
 
 int main() {
@@ -342,6 +365,52 @@ int main() {
             check(std::abs(crossings(12.0f, 0.0f) / base - 2.0) < 0.03, "+12 semitones doubles the frequency");
             check(std::abs(crossings(0.0f, 100.0f) / base - 1.0595) < 0.02, "+100 cents = +1 semitone");
         }
+    }
+
+    {
+        std::cout << "[11] Aliasing and quality (inharmonic energy, lower is cleaner)\n";
+        const double f0 = 987.77; // B5
+        auto squareDb = [&]() {
+            auto p = makeProcessor(512);
+            setParam(*p, "osc_morph", 2.0f); setParam(*p, "pitch_depth", 0.0f); setParam(*p, "click_type", 0.0f);
+            setParam(*p, "drive_mode", 0.0f); setParam(*p, "cutoff", 8000.0f); setParam(*p, "filter_env_depth", 0.0f);
+            setParam(*p, "ahd_hold", 1500.0f); setParam(*p, "ahd_decay", 2000.0f); setParam(*p, "master_volume", -12.0f);
+            auto out = render(*p, 60000, 512, { { 0, juce::MidiMessage::noteOn(1, 83, 1.0f) } });
+            return inharmonicDb(out, 12000, f0, 48000.0);
+        };
+        const double sq = squareDb();
+        check(sq < -35.0, "square sub is band-limited (" + juce::String(sq, 1) + " dB, was -22.8 dB unfiltered: " + juce::String(-22.8 - sq, 1) + " dB cleaner)");
+
+        auto foldDb = [&](float quality) {
+            auto p = makeProcessor(512);
+            setParam(*p, "osc_morph", 0.0f); setParam(*p, "pitch_depth", 0.0f); setParam(*p, "click_type", 0.0f);
+            setParam(*p, "drive_mode", 3.0f); setParam(*p, "drive_gain", 10.0f); setParam(*p, "quality", quality);
+            setParam(*p, "cutoff", 8000.0f); setParam(*p, "filter_env_depth", 0.0f);
+            setParam(*p, "ahd_hold", 1500.0f); setParam(*p, "ahd_decay", 2000.0f); setParam(*p, "master_volume", -12.0f);
+            setParam(*p, "tune", 12.0f);
+            auto out = render(*p, 60000, 512, { { 0, juce::MidiMessage::noteOn(1, 72, 1.0f) } });
+            return inharmonicDb(out, 12000, 523.25 * 2.0, 48000.0);
+        };
+        const double f2 = foldDb(0.0f), f4 = foldDb(1.0f);
+        std::cout << "        foldback at drive 10: 2x " << f2 << " dB, 4x " << f4 << " dB\n";
+        check(f4 < f2 - 2.0, "4x quality is cleaner than 2x (by " + juce::String(f2 - f4, 1) + " dB; modest, foldback is very broadband)");
+    }
+
+    {
+        std::cout << "[12] Velocity sensitivity\n";
+        auto level = [&](float sens, float vel) {
+            auto p = makeProcessor(512);
+            setParam(*p, "osc_morph", 0.0f); setParam(*p, "pitch_depth", 0.0f); setParam(*p, "click_type", 0.0f);
+            setParam(*p, "drive_mode", 0.0f); setParam(*p, "vel_sens", sens);
+            setParam(*p, "ahd_hold", 500.0f); setParam(*p, "ahd_decay", 2000.0f); setParam(*p, "cutoff", 8000.0f);
+            auto out = render(*p, 24000, 512, { { 0, juce::MidiMessage::noteOn(1, 45, vel) } });
+            double e = 0; for (int i = 6000; i < 12000; ++i) e += (double) out[(size_t) i] * out[(size_t) i];
+            return std::sqrt(e / 6000.0);
+        };
+        check(std::abs(level(0.0f, 0.3f) - level(0.0f, 1.0f)) < 0.01 * level(0.0f, 1.0f),
+              "0% sensitivity: soft and hard hits are the same level");
+        const double ratio = level(1.0f, 0.5f) / level(1.0f, 1.0f);
+        check(std::abs(ratio - 0.5) < 0.03, "100% sensitivity: half velocity is half level (" + juce::String(ratio, 2) + ")");
     }
 
     {

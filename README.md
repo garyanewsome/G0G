@@ -85,7 +85,7 @@ $$H(z) = \text{SVF\_LPF}(X(z), f_{\text{cutoff}})$$
 | CLICK | TYPE / LEVEL | Noise burst on each note (off, white, pink) |
 | DRIVE | MODE / AMOUNT | Tube, clip or foldback saturation (2x oversampled) |
 | FILTER | CUTOFF / SWEEP / SPEED | Post-drive low-pass, plus its envelope depth and decay |
-| OUT | VOL | Master level (dB) |
+| OUT | 2X/4X / VEL / VOL | Drive oversampling quality; velocity sensitivity (0% = every hit full level, like a real 808); master level (dB) |
 | PERF | PITCH / MOD | Pitch wheel (+/-2 semitones) and mod wheel (opens the filter by up to 4 kHz) |
 
 Hover any control title for a plain-English definition. Seven factory presets
@@ -103,7 +103,8 @@ as `.g0gpreset` files in `~/Library/Application Support/G0G/Presets/`.
 * GATE mode fades the tail over REL when the last key is released; ONE-SHOT lets it ring. LEGATO slides overlapping notes without re-triggering.
 * A fixed 20 Hz high-pass after the drive removes the DC the asymmetric tube mode creates; a soft limiter above 0.9 keeps the output within full scale.
 * Decay tails are normalised so they reach exactly zero (no click when the voice ends).
-* Drive runs through a 2x polyphase IIR oversampler (reported as plugin latency) and is skipped entirely when bypassed.
+* Drive runs through a 2x or 4x (selectable) polyphase IIR oversampler, with the matching latency reported, and is skipped entirely when bypassed.
+* The square is band-limited (PolyBLEP): about 17 dB less aliasing than a naive square at B5.
 * Parameter handles are cached; smoothers are primed on the first block to avoid a fade-in.
 
 ### 2. User Interface (`PluginEditor.cpp`, `G0GLookAndFeel.h`)

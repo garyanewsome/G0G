@@ -150,8 +150,13 @@ public:
         else if (phi < 0.75f) triVal = 2.0f - 4.0f * phi;
         else triVal = -4.0f + 4.0f * phi;
 
-        // Square
-        float sqVal = (sineVal >= 0.0f) ? 1.0f : -1.0f;
+        // Square, band-limited with PolyBLEP so it does not alias on higher notes.
+        const float dt = static_cast<float>(juce::jlimit(1.0e-5, 0.49, static_cast<double>(frequency) / sampleRate));
+        float sqVal = (phi < 0.5f) ? 1.0f : -1.0f;
+        sqVal += polyBlep(phi, dt);
+        float phiHalf = phi + 0.5f;
+        if (phiHalf >= 1.0f) phiHalf -= 1.0f;
+        sqVal -= polyBlep(phiHalf, dt);
 
         // Linearly interpolate waves based on oscMorph (0 = Sine, 1 = Tri, 2 = Square)
         float oscValue = 0.0f;
@@ -221,6 +226,20 @@ public:
     }
 
 private:
+    // Polynomial band-limited step correction for a discontinuity at t = 0
+    // (t in [0,1), dt = phase increment per sample in cycles).
+    static float polyBlep(float t, float dt) {
+        if (t < dt) {
+            t /= dt;
+            return t + t - t * t - 1.0f;
+        }
+        if (t > 1.0f - dt) {
+            t = (t - 1.0f) / dt;
+            return t * t + t + t + 1.0f;
+        }
+        return 0.0f;
+    }
+
     // Raw shape: -1.0 = linear, 0.0 = exponential, 1.0 = tight exponential.
     float shapeRaw(float ratio) const {
         if (decayShape == 0.0f)
