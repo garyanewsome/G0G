@@ -9,7 +9,7 @@
  */
 class SubEngine {
 public:
-    enum class EnvState { Idle, Hold, Decay };
+    enum class EnvState { Idle, Hold, Decay, Release };
 
     SubEngine() = default;
 
@@ -25,22 +25,41 @@ public:
         decaySamplesElapsed = 0;
         pitchSamplesElapsed = 0;
         filterSamplesElapsed = 0;
+        releaseSamplesElapsed = 0;
+        lastAmp = 0.0f;
         noteActive = false;
         triggerVelocity = 0.0f;
     }
 
-    void trigger(float velocity) {
+    // Starts the pitch punch + amplitude envelope. With resetPhase the sub
+    // always starts at the same point of its cycle, so every hit has the same
+    // attack (an 808 kick is identical each time).
+    void trigger(float velocity, bool resetPhase = true) {
         envState = EnvState::Hold;
         holdSamplesElapsed = 0;
         decaySamplesElapsed = 0;
         pitchSamplesElapsed = 0;
         filterSamplesElapsed = 0;
+        releaseSamplesElapsed = 0;
         noteActive = true;
         triggerVelocity = velocity;
+        if (resetPhase) phase = 0.0;
     }
 
-    void release() {
-        if (envState == EnvState::Hold) {
+    // Key released and no other key held.
+    //  gate == false (one-shot): the tail rings out at its own decay time.
+    //  gate == true: the sound fades out over the release time, so the note
+    //                length decides how long the bass lasts.
+    void release(bool gate = false) {
+        if (gate) {
+            if (envState == EnvState::Hold || envState == EnvState::Decay) {
+                frozenHoldProgress = getHoldProgress();
+                frozenDecayProgress = getDecayProgress();
+                releaseStartAmp = lastAmp;
+                releaseSamplesElapsed = 0;
+                envState = EnvState::Release;
+            }
+        } else if (envState == EnvState::Hold) {
             envState = EnvState::Decay;
             decaySamplesElapsed = 0;
         }
@@ -61,6 +80,10 @@ public:
 
     void setOscMorph(float morph) {
         oscMorph = juce::jlimit(0.0f, 2.0f, morph);
+    }
+
+    void setReleaseTime(float releaseTimeMs) {
+        releaseSamplesTotal = juce::jmax(1, static_cast<int>((releaseTimeMs / 1000.0f) * sampleRate));
     }
 
     void setDecayShape(float shape) {
@@ -139,7 +162,7 @@ public:
             oscValue = (1.0f - m2) * triVal + m2 * sqVal;
         }
 
-        // 4. Process shape-bent amplitude envelope (AHD)
+        // 4. Amplitude envelope: hold -> shaped decay, or a gated release
         float amp = 0.0f;
         if (envState == EnvState::Hold) {
             amp = 1.0f;
@@ -151,20 +174,7 @@ public:
         } else if (envState == EnvState::Decay) {
             if (decaySamplesTotal > 0) {
                 float ratio = static_cast<float>(decaySamplesElapsed) / static_cast<float>(decaySamplesTotal);
-                
-                // Shape-bending: -1.0 = Linear, 0.0 = Exponential, 1.0 = Tight Exp
-                if (decayShape == 0.0f) {
-                    amp = std::exp(-5.0f * ratio);
-                } else if (decayShape < 0.0f) {
-                    // Linear morph
-                    float lin = 1.0f - ratio;
-                    float expVal = std::exp(-5.0f * ratio);
-                    amp = (1.0f + decayShape) * expVal - decayShape * lin;
-                } else {
-                    // Tight exponential rates 5 to 12
-                    float rate = 5.0f + decayShape * 7.0f;
-                    amp = std::exp(-rate * ratio);
-                }
+                amp = decayAmplitude(ratio);
 
                 decaySamplesElapsed++;
                 if (ratio >= 1.0f || amp < 0.0001f) {
@@ -175,7 +185,18 @@ public:
                 envState = EnvState::Idle;
                 noteActive = false;
             }
+        } else if (envState == EnvState::Release) {
+            float ratio = static_cast<float>(releaseSamplesElapsed) / static_cast<float>(releaseSamplesTotal);
+            // Normalised exponential fade, exactly zero at the end.
+            const float floorV = std::exp(-5.0f);
+            amp = releaseStartAmp * juce::jmax(0.0f, (std::exp(-5.0f * ratio) - floorV) / (1.0f - floorV));
+            releaseSamplesElapsed++;
+            if (ratio >= 1.0f || amp < 0.0001f) {
+                envState = EnvState::Idle;
+                noteActive = false;
+            }
         }
+        lastAmp = amp;
 
         return oscValue * amp * triggerVelocity;
     }
@@ -184,18 +205,42 @@ public:
     EnvState getEnvState() const { return envState; }
     
     float getHoldProgress() const {
+        if (envState == EnvState::Release)
+            return frozenHoldProgress;
         if (envState == EnvState::Hold && holdSamplesTotal > 0)
             return static_cast<float>(holdSamplesElapsed) / static_cast<float>(holdSamplesTotal);
         return 0.0f;
     }
     
     float getDecayProgress() const {
+        if (envState == EnvState::Release)
+            return frozenDecayProgress;
         if (envState == EnvState::Decay && decaySamplesTotal > 0)
             return static_cast<float>(decaySamplesElapsed) / static_cast<float>(decaySamplesTotal);
         return 0.0f;
     }
 
 private:
+    // Raw shape: -1.0 = linear, 0.0 = exponential, 1.0 = tight exponential.
+    float shapeRaw(float ratio) const {
+        if (decayShape == 0.0f)
+            return std::exp(-5.0f * ratio);
+        if (decayShape < 0.0f) {
+            float lin = 1.0f - ratio;
+            float expVal = std::exp(-5.0f * ratio);
+            return (1.0f + decayShape) * expVal - decayShape * lin;
+        }
+        float rate = 5.0f + decayShape * 7.0f;
+        return std::exp(-rate * ratio);
+    }
+
+    // Normalised so the tail is exactly 1 at the start and exactly 0 at the
+    // end (the raw curves stop ~0.7% short, which clicked when the voice cut).
+    float decayAmplitude(float ratio) const {
+        const float end = shapeRaw(1.0f);
+        return juce::jmax(0.0f, (shapeRaw(ratio) - end) / (1.0f - end));
+    }
+
     double sampleRate = 44100.0;
     double phase = 0.0;
     
@@ -217,6 +262,14 @@ private:
     float filterEnvDepth = 1000.0f;
     int filterEnvSamplesTotal = 0;
     int filterSamplesElapsed = 0;
+
+    // Gated release
+    int releaseSamplesTotal = 4800;
+    int releaseSamplesElapsed = 0;
+    float releaseStartAmp = 0.0f;
+    float lastAmp = 0.0f;
+    float frozenHoldProgress = 0.0f;
+    float frozenDecayProgress = 0.0f;
 
     bool noteActive = false;
     float triggerVelocity = 0.0f;

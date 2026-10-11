@@ -3,7 +3,7 @@
 #include "Presets.h"
 
 namespace {
-constexpr int kBaseWidth = 1100;
+constexpr int kBaseWidth = 1260;
 constexpr int kBaseHeight = 470;
 constexpr int kHeaderHeight = 58;
 constexpr int kVisualizerHeight = 162;
@@ -48,7 +48,26 @@ G0GAudioProcessorEditor::G0GAudioProcessorEditor(G0GAudioProcessor& p)
         return juce::String(n[juce::jlimit(0, 2, (int) std::round(v))]);
     };
 
+    addKnob(tune, "tune", "TUNE",
+            "Tune: transposes the whole instrument in semitones. Use -12 or "
+            "-24 to drop the bass an octave or two; +12 is an octave up.");
+    tune.slider.textFromValueFunction = [](double v) {
+        const int n = juce::roundToInt(v);
+        return (n > 0 ? "+" : "") + juce::String(n) + " st";
+    };
+    addKnob(fineTune, "fine_tune", "FINE",
+            "Fine tune: nudges the pitch in cents (100 cents = 1 semitone) "
+            "to match a sample or another instrument.");
+    fineTune.slider.textFromValueFunction = [](double v) {
+        const int n = juce::roundToInt(v);
+        return (n > 0 ? "+" : "") + juce::String(n) + " ct";
+    };
+
     // ---- Glide
+    addChoice(legatoMode, "legato", juce::StringArray("RETRIG", "LEGATO"),
+              "Note handling: RETRIG punches on every note. LEGATO lets "
+              "overlapping notes slide without re-punching, like a played "
+              "808 line.");
     addKnob(glideTime, "glide_time", "TIME",
             "Glide time: how long the pitch takes to slide from the previous "
             "note to the next one. Zero jumps straight to the new note.");
@@ -88,6 +107,16 @@ G0GAudioProcessorEditor::G0GAudioProcessorEditor(G0GAudioProcessor& p)
             "classic exponential tail, right is tighter and snappier.");
     decayCurve.slider.textFromValueFunction = percentText;
     decayCurve.slider.valueFromTextFunction = percentFromText;
+
+    addChoice(gateMode, "gate_mode", juce::StringArray("ONE-SHOT", "GATE"),
+              "ONE-SHOT: every note rings its full decay, like a drum "
+              "machine. GATE: the note length shapes the bass - when the key "
+              "is released the sound fades out over RELEASE.");
+    addKnob(release, "release", "REL",
+            "Release: in GATE mode, how quickly the bass fades after you "
+            "let go of the key. Short is tight, long is smooth.");
+    release.slider.textFromValueFunction = timeText;
+    release.slider.valueFromTextFunction = timeFromText;
 
     // ---- Click
     addChoice(clickType, "click_type", juce::StringArray("OFF", "WHITE", "PINK"),
@@ -158,7 +187,7 @@ G0GAudioProcessorEditor::G0GAudioProcessorEditor(G0GAudioProcessor& p)
     modWheel.slider.setValue(audioProcessor.modWheel.load(), juce::dontSendNotification);
 
     // Formatters were assigned after the attachments, so refresh the read-outs.
-    for (auto* k : {&morph, &glideTime, &glideCurve, &pitchDepth, &pitchDecay, &hold, &decay,
+    for (auto* k : {&morph, &tune, &fineTune, &release, &glideTime, &glideCurve, &pitchDepth, &pitchDecay, &hold, &decay,
                     &decayCurve, &clickLevel, &driveGain, &cutoff, &filterEnvDepth,
                     &filterEnvDecay, &masterVol})
         k->slider.updateText();
@@ -166,10 +195,10 @@ G0GAudioProcessorEditor::G0GAudioProcessorEditor(G0GAudioProcessor& p)
     // ---- Sections (weights are relative widths)
     sections = {
         {"PERF",   nullptr,      {&pitchWheel, &modWheel}, 1.0f, {}},
-        {"SUB",    nullptr,      {&morph}, 1.0f, {}},
-        {"GLIDE",  nullptr,      {&glideTime, &glideCurve}, 1.0f, {}},
+        {"SUB",    nullptr,      {&morph, &tune, &fineTune}, 1.0f, {}},
+        {"GLIDE",  &legatoMode,  {&glideTime, &glideCurve}, 1.0f, {}},
         {"PUNCH",  nullptr,      {&pitchDepth, &pitchDecay}, 1.0f, {}},
-        {"AMP",    nullptr,      {&hold, &decay, &decayCurve}, 1.0f, {}},
+        {"AMP",    &gateMode,    {&hold, &decay, &decayCurve, &release}, 1.0f, {}},
         {"CLICK",  &clickType,   {&clickLevel}, 1.7f, {}},
         {"DRIVE",  &driveMode,   {&driveGain}, 1.7f, {}},
         {"FILTER", nullptr,      {&cutoff, &filterEnvDepth, &filterEnvDecay}, 1.0f, {}},

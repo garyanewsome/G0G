@@ -83,6 +83,11 @@ private:
         std::atomic<float>* filterEnvDecay = nullptr;
         std::atomic<float>* filterEnvDepth = nullptr;
         std::atomic<float>* masterVol = nullptr;
+        std::atomic<float>* release = nullptr;
+        std::atomic<float>* gateMode = nullptr;   // 0 one-shot, 1 gate
+        std::atomic<float>* legato = nullptr;     // 0 retrigger, 1 legato
+        std::atomic<float>* tune = nullptr;       // semitones
+        std::atomic<float>* fineTune = nullptr;   // cents
     } params;
 
     // Drive runs oversampled to keep clip/foldback aliasing out of the audio.
@@ -99,6 +104,10 @@ private:
 
     // Post-Drive SVF Low-Pass Filter
     juce::dsp::StateVariableTPTFilter<float> postDriveFilter;
+
+    // Fixed ~20 Hz high-pass after the drive: removes the DC the asymmetric
+    // tube mode creates, plus rumble nobody can hear but headroom pays for.
+    juce::dsp::StateVariableTPTFilter<float> lowCutFilter;
 
     // Parameter smoothing values
     juce::LinearSmoothedValue<float> smoothedMasterVol;

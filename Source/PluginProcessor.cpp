@@ -2,6 +2,18 @@
 #include "PluginEditor.h"
 #include "Presets.h"
 
+namespace {
+// Transparent below 0.9; above it the knee eases into a hard ceiling at 1.0 so
+// the output never exceeds full scale (drive + DC removal can overshoot).
+inline float softLimit(float x) {
+    constexpr float threshold = 0.9f, room = 1.0f - threshold;
+    const float a = std::abs(x);
+    if (a <= threshold)
+        return x;
+    return std::copysign(threshold + room * std::tanh((a - threshold) / room), x);
+}
+} // namespace
+
 G0GAudioProcessor::G0GAudioProcessor()
     : AudioProcessor(BusesProperties().withOutput("Output", juce::AudioChannelSet::stereo(), true)),
       apvts(*this, nullptr, "Parameters", createParameterLayout())
@@ -22,6 +34,11 @@ G0GAudioProcessor::G0GAudioProcessor()
     params.filterEnvDecay = apvts.getRawParameterValue("filter_env_decay");
     params.filterEnvDepth = apvts.getRawParameterValue("filter_env_depth");
     params.masterVol      = apvts.getRawParameterValue("master_volume");
+    params.release        = apvts.getRawParameterValue("release");
+    params.gateMode       = apvts.getRawParameterValue("gate_mode");
+    params.legato         = apvts.getRawParameterValue("legato");
+    params.tune           = apvts.getRawParameterValue("tune");
+    params.fineTune       = apvts.getRawParameterValue("fine_tune");
 }
 
 G0GAudioProcessor::~G0GAudioProcessor() = default;
@@ -83,6 +100,10 @@ void G0GAudioProcessor::prepareToPlay(double sampleRate, int samplesPerBlock) {
     postDriveFilter.prepare(spec);
     postDriveFilter.setType(juce::dsp::StateVariableTPTFilterType::lowpass);
 
+    lowCutFilter.prepare(spec);
+    lowCutFilter.setType(juce::dsp::StateVariableTPTFilterType::highpass);
+    lowCutFilter.setCutoffFrequency(20.0f);
+
     // 2x oversampled drive (polyphase half-band IIR, low latency).
     oversampling = std::make_unique<juce::dsp::Oversampling<float>>(
         2, 1, juce::dsp::Oversampling<float>::filterHalfBandPolyphaseIIR, true, false);
@@ -122,6 +143,10 @@ void G0GAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::Mid
     subEngine.setPitchParams(params.pitchDepth->load(), params.pitchDecay->load());
     subEngine.setOscMorph(params.oscMorph->load());
     subEngine.setDecayShape(params.decayCurve->load());
+    subEngine.setReleaseTime(params.release->load());
+    const bool gateMode = params.gateMode->load() > 0.5f;
+    const bool legatoMode = params.legato->load() > 0.5f;
+    const float tuneRatio = std::exp2((params.tune->load() + params.fineTune->load() / 100.0f) / 12.0f);
     subEngine.setFilterEnvParams(params.filterEnvDepth->load(), params.filterEnvDecay->load());
 
     const int clickTypeVal = static_cast<int>(params.clickType->load());
@@ -161,21 +186,26 @@ void G0GAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::Mid
             while (midiIt != midiEnd && (*midiIt).samplePosition <= pos) {
                 const auto msg = (*midiIt).getMessage();
                 if (msg.isNoteOn()) {
+                    // Legato: a note played while another is held just slides
+                    // (no new punch, click or envelope), like a real 808 line.
+                    const bool slurred = legatoMode && glideUnit.isAnyNoteHeld() && subEngine.isActive();
                     glideUnit.noteOn(msg.getNoteNumber(), msg.getFloatVelocity());
-                    subEngine.trigger(msg.getFloatVelocity());
-                    clickEngine.trigger(clickTypeVal);
+                    if (!slurred) {
+                        subEngine.trigger(msg.getFloatVelocity(), true);
+                        clickEngine.trigger(clickTypeVal);
+                    }
                 } else if (msg.isNoteOff()) {
                     glideUnit.noteOff(msg.getNoteNumber());
                     // Only release the amplitude envelope once all keys are up.
                     if (!glideUnit.isAnyNoteHeld())
-                        subEngine.release();
+                        subEngine.release(gateMode);
                 } else if (msg.isPitchWheel()) {
                     pitchBend.store(static_cast<float>(msg.getPitchWheelValue() - 8192) / 8192.0f);
                 } else if (msg.isController() && msg.getControllerNumber() == 1) {
                     modWheel.store(static_cast<float>(msg.getControllerValue()) / 127.0f);
                 } else if (msg.isAllNotesOff() || msg.isAllSoundOff()) {
                     glideUnit.reset();
-                    subEngine.release();
+                    subEngine.release(true);
                 }
                 ++midiIt;
             }
@@ -184,7 +214,7 @@ void G0GAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::Mid
             bendSmoothed += (pitchBend.load() - bendSmoothed) * 0.005f;
             const float bendRatio = std::exp2(bendSmoothed * 2.0f / 12.0f);
 
-            const float freq = glideUnit.getNextFrequency() * bendRatio;
+            const float freq = glideUnit.getNextFrequency() * bendRatio * tuneRatio;
             const float subSample = subEngine.getNextSample(freq);
             const float clickSample = clickEngine.getNextSample() * smoothedClickLevel.getNextValue();
             filterEnv[j] = subEngine.getNextFilterEnvOffset();
@@ -211,15 +241,17 @@ void G0GAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::Mid
         for (int j = 0; j < n; ++j) {
             const float cut = juce::jlimit(20.0f, 20000.0f, baseCutoff + filterEnv[j] + wheelOffset);
             postDriveFilter.setCutoffFrequency(cut);
-            left[chunkStart + j] = postDriveFilter.processSample(0, left[chunkStart + j]);
-            right[chunkStart + j] = postDriveFilter.processSample(1, right[chunkStart + j]);
+            const float l = lowCutFilter.processSample(0, left[chunkStart + j]);
+            const float r = lowCutFilter.processSample(1, right[chunkStart + j]);
+            left[chunkStart + j] = postDriveFilter.processSample(0, l);
+            right[chunkStart + j] = postDriveFilter.processSample(1, r);
         }
 
         // Master volume with smoothing.
         for (int j = 0; j < n; ++j) {
             const float g = smoothedMasterVol.getNextValue();
-            left[chunkStart + j] *= g;
-            right[chunkStart + j] *= g;
+            left[chunkStart + j] = softLimit(left[chunkStart + j] * g);
+            right[chunkStart + j] = softLimit(right[chunkStart + j] * g);
         }
     }
 }
@@ -291,6 +323,18 @@ juce::AudioProcessorValueTreeState::ParameterLayout G0GAudioProcessor::createPar
         juce::ParameterID("filter_env_decay", 1), "Filter Env Decay (ms)", juce::NormalisableRange<float>(10.0f, 1000.0f, 1.0f, 0.4f), 150.0f));
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
         juce::ParameterID("filter_env_depth", 1), "Filter Env Depth (Hz)", juce::NormalisableRange<float>(0.0f, 5000.0f, 1.0f, 0.4f), 1000.0f));
+
+    // 6b. Gate / legato / tuning
+    params.push_back(std::make_unique<juce::AudioParameterChoice>(
+        juce::ParameterID("gate_mode", 1), "Gate Mode", juce::StringArray("One-Shot", "Gate"), 1));
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID("release", 1), "Release (ms)", juce::NormalisableRange<float>(5.0f, 2000.0f, 1.0f, 0.4f), 120.0f));
+    params.push_back(std::make_unique<juce::AudioParameterChoice>(
+        juce::ParameterID("legato", 1), "Legato", juce::StringArray("Retrigger", "Legato"), 1));
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID("tune", 1), "Tune (st)", juce::NormalisableRange<float>(-24.0f, 24.0f, 1.0f), 0.0f));
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID("fine_tune", 1), "Fine Tune (ct)", juce::NormalisableRange<float>(-100.0f, 100.0f, 1.0f), 0.0f));
 
     // 7. Master Volume
     params.push_back(std::make_unique<juce::AudioParameterFloat>(

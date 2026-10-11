@@ -100,7 +100,7 @@ int main() {
         bool finite = true; float peak = 0.0f;
         for (float v : out) { finite &= std::isfinite(v); peak = std::max(peak, std::abs(v)); }
         check(finite, "all samples finite");
-        check(peak > 0.05f, "audible output (peak " + juce::String(peak, 3) + ")");
+        check(peak > 0.05f && peak <= 1.0f, "audible and within full scale (peak " + juce::String(peak, 3) + ")");
     }
 
     {
@@ -204,12 +204,12 @@ int main() {
                                                { 12000, juce::MidiMessage::noteOff(1, 36) } });
             float peak = 0.0f; bool fin = true;
             for (float v : out) { fin &= std::isfinite(v); peak = std::max(peak, std::abs(v)); }
-            const bool ok = fin && peak > 0.02f && peak < 8.0f;
+            const bool ok = fin && peak > 0.02f && peak <= 1.0f;
             all &= ok;
             std::cout << "        " << p->getProgramName(i) << ": peak " << peak << (ok ? "" : "  <-- BAD") << "\n";
             p->processBlock(*std::make_unique<juce::AudioBuffer<float>>(2, 64), *std::make_unique<juce::MidiBuffer>());
         }
-        check(all, "every factory preset is finite and audible");
+        check(all, "every factory preset is finite, audible and never above full scale");
     }
 
     {
@@ -240,6 +240,108 @@ int main() {
         float el = 0.0f;
         for (int i = 0; i < (int) (0.2 * sr); ++i) el = e.getNextFrequency();
         check(std::abs(el - 41.203f) < 0.01f, "exponential curve lands exactly (" + juce::String(el, 3) + " Hz)");
+    }
+
+    {
+        std::cout << "[10] 808 behaviour: gate, DC, attack, tail, legato, tune\n";
+        auto rmsOf = [](const std::vector<float>& x, int a, int b) {
+            double e = 0; for (int i = a; i < b; ++i) e += (double) x[(size_t) i] * x[(size_t) i];
+            return std::sqrt(e / std::max(1, b - a));
+        };
+        auto cleanSine = [&](G0GAudioProcessor& p) {
+            setParam(p, "osc_morph", 0.0f); setParam(p, "pitch_depth", 0.0f); setParam(p, "click_type", 0.0f);
+            setParam(p, "drive_mode", 0.0f); setParam(p, "cutoff", 8000.0f); setParam(p, "master_volume", 0.0f);
+            setParam(p, "filter_env_depth", 0.0f);
+        };
+
+        // Gate: note length decides the tail.
+        {
+            auto run = [&](float gate) {
+                auto p = makeProcessor(512);
+                cleanSine(*p);
+                setParam(*p, "ahd_hold", 20.0f); setParam(*p, "ahd_decay", 3000.0f);
+                setParam(*p, "gate_mode", gate); setParam(*p, "release", 80.0f);
+                return render(*p, (int) (1.5 * sr), 512, { { 0, juce::MidiMessage::noteOn(1, 36, 1.0f) },
+                                                           { (int) (0.2 * sr), juce::MidiMessage::noteOff(1, 36) } });
+            };
+            auto gated = run(1.0f), oneShot = run(0.0f);
+            const double ref = rmsOf(gated, 4800, 5280);
+            check(rmsOf(gated, 19200, 19680) < ref * 0.01, "gate: silent 100 ms after a short note ends");
+            check(rmsOf(oneShot, 19200, 19680) > ref * 0.3, "one-shot: tail still rings after note-off");
+        }
+
+        // DC offset from the asymmetric tube drive is removed.
+        {
+            auto p = makeProcessor(512);
+            cleanSine(*p);
+            setParam(*p, "drive_mode", 1.0f); setParam(*p, "drive_gain", 6.0f);
+            setParam(*p, "ahd_hold", 900.0f); setParam(*p, "ahd_decay", 2000.0f);
+            auto out = render(*p, (int) sr, 512, { { 0, juce::MidiMessage::noteOn(1, 36, 1.0f) } });
+            double mean = 0; for (int i = 9600; i < 40000; ++i) mean += out[(size_t) i];
+            mean /= (40000 - 9600);
+            check(std::abs(mean) < 0.01, "tube drive has no DC offset (mean " + juce::String(mean, 4) + ")");
+        }
+
+        // Every hit has the same attack (phase reset on trigger).
+        {
+            auto p = makeProcessor(512);
+            cleanSine(*p);
+            setParam(*p, "legato", 0.0f);
+            setParam(*p, "ahd_hold", 20.0f); setParam(*p, "ahd_decay", 100.0f);
+            auto out = render(*p, (int) sr, 512, { { 0, juce::MidiMessage::noteOn(1, 40, 1.0f) },
+                                                    { 12000, juce::MidiMessage::noteOff(1, 40) },
+                                                    { 24000 + 137, juce::MidiMessage::noteOn(1, 40, 1.0f) } });
+            const float a = out[20], b = out[(size_t) (24000 + 137 + 20)];
+            check(std::abs(a - b) < 0.02f && a > 0.0f && b > 0.0f,
+                  "retrigger starts at the same phase (" + juce::String(a, 3) + " vs " + juce::String(b, 3) + ")");
+        }
+
+        // Tail ends with no step.
+        {
+            auto p = makeProcessor(512);
+            cleanSine(*p);
+            setParam(*p, "ahd_hold", 5.0f); setParam(*p, "ahd_decay", 300.0f);
+            setParam(*p, "gate_mode", 0.0f);
+            auto out = render(*p, (int) (0.6 * sr), 512, { { 0, juce::MidiMessage::noteOn(1, 60, 1.0f) } });
+            float maxStepLate = 0;
+            for (int i = (int) (0.28 * sr); i < (int) (0.40 * sr); ++i)
+                maxStepLate = std::max(maxStepLate, std::abs(out[(size_t) i] - out[(size_t) i - 1]));
+            check(maxStepLate < 0.01f, "no click at the end of the tail (max step " + juce::String(maxStepLate, 5) + ")");
+        }
+
+        // Legato: an overlapping note does not retrigger the envelope.
+        {
+            auto run = [&](float legato) {
+                auto p = makeProcessor(512);
+                cleanSine(*p);
+                setParam(*p, "legato", legato);
+                setParam(*p, "ahd_hold", 10.0f); setParam(*p, "ahd_decay", 2000.0f);
+                setParam(*p, "glide_time", 50.0f);
+                return render(*p, (int) sr, 512, { { 0, juce::MidiMessage::noteOn(1, 36, 1.0f) },
+                                                    { 24000, juce::MidiMessage::noteOn(1, 43, 1.0f) } });
+            };
+            auto legato = run(1.0f), retrig = run(0.0f);
+            const double before = rmsOf(legato, 23000, 23900);
+            const double afterLegato = rmsOf(legato, 28000, 28900);
+            const double afterRetrig = rmsOf(retrig, 28000, 28900);
+            check(afterLegato < before * 1.05, "legato: slide keeps the decaying level (" + juce::String(afterLegato / before, 2) + "x)");
+            check(afterRetrig > before * 1.5, "retrigger: second note punches again (" + juce::String(afterRetrig / before, 2) + "x)");
+        }
+
+        // Tune and fine tune.
+        {
+            auto crossings = [&](float tune, float fine) {
+                auto p = makeProcessor(512);
+                cleanSine(*p);
+                setParam(*p, "tune", tune); setParam(*p, "fine_tune", fine);
+                setParam(*p, "ahd_hold", 900.0f); setParam(*p, "ahd_decay", 2000.0f);
+                auto out = render(*p, (int) sr, 512, { { 0, juce::MidiMessage::noteOn(1, 48, 1.0f) } });
+                return (double) zeroCrossings(out, 12000, 36000);
+            };
+            const double base = crossings(0.0f, 0.0f);
+            check(std::abs(crossings(12.0f, 0.0f) / base - 2.0) < 0.03, "+12 semitones doubles the frequency");
+            check(std::abs(crossings(0.0f, 100.0f) / base - 1.0595) < 0.02, "+100 cents = +1 semitone");
+        }
     }
 
     {

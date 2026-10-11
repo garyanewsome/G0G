@@ -78,10 +78,10 @@ $$H(z) = \text{SVF\_LPF}(X(z), f_{\text{cutoff}})$$
 
 | Panel | Control | What it does |
 |---|---|---|
-| SUB | MORPH | Sub waveform: sine, triangle, square |
-| GLIDE | TIME / CURVE | Portamento time and shape (linear to exponential) |
+| SUB | MORPH / TUNE / FINE | Sub waveform (sine, triangle, square); transpose in semitones; fine tune in cents |
+| GLIDE | LEGATO / TIME / CURVE | Retrigger or legato (overlapping notes slide without re-punching); portamento time and shape |
 | PUNCH | DEPTH / SPEED | Starting pitch offset (semitones) and how fast it drops |
-| AMP | HOLD / DECAY / SHAPE | AHD amplitude envelope and its decay curve |
+| AMP | GATE / HOLD / DECAY / SHAPE / REL | One-shot (rings its full decay) or gate (note length shapes the bass, fades over REL); AHD envelope and decay curve |
 | CLICK | TYPE / LEVEL | Noise burst on each note (off, white, pink) |
 | DRIVE | MODE / AMOUNT | Tube, clip or foldback saturation (2x oversampled) |
 | FILTER | CUTOFF / SWEEP / SPEED | Post-drive low-pass, plus its envelope depth and decay |
@@ -99,7 +99,10 @@ as `.g0gpreset` files in `~/Library/Application Support/G0G/Presets/`.
 * A single monophonic voice: `GlideUnit` -> `SubEngine` + `ClickEngine` -> `SaturationCore` -> SVF low-pass.
 * MIDI is applied at its exact sample position; control updates (drive, filter, gain) run in 64-sample chunks, so output does not depend on the host buffer size.
 * The filter envelope advances per sample; the cutoff is `base + envelope + mod wheel`.
-* Velocity is normalised 0..1.
+* Velocity is normalised 0..1. Every trigger restarts the sub's phase, so each hit has the same attack.
+* GATE mode fades the tail over REL when the last key is released; ONE-SHOT lets it ring. LEGATO slides overlapping notes without re-triggering.
+* A fixed 20 Hz high-pass after the drive removes the DC the asymmetric tube mode creates; a soft limiter above 0.9 keeps the output within full scale.
+* Decay tails are normalised so they reach exactly zero (no click when the voice ends).
 * Drive runs through a 2x polyphase IIR oversampler (reported as plugin latency) and is skipped entirely when bypassed.
 * Parameter handles are cached; smoothers are primed on the first block to avoid a fade-in.
 

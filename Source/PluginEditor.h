@@ -57,9 +57,10 @@ private:
     juce::TooltipWindow tooltipWindow { this, 350 };
 
     // Sub / glide / punch / amp envelope
-    Knob morph, glideTime, glideCurve, pitchDepth, pitchDecay, hold, decay, decayCurve;
+    Knob morph, tune, fineTune, glideTime, glideCurve, pitchDepth, pitchDecay, hold, decay,
+         decayCurve, release;
     // Click / drive
-    Choice clickType, driveMode;
+    Choice clickType, driveMode, gateMode, legatoMode;
     Knob clickLevel, driveGain;
     // Filter / master
     Knob cutoff, filterEnvDepth, filterEnvDecay, masterVol;
