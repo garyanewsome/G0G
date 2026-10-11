@@ -53,6 +53,7 @@ target_sources(G0G PRIVATE
     Source/PluginEditor.cpp
     Source/PluginEditor.h
     Source/Presets.h
+    Source/G0GLookAndFeel.h
     Source/GlideUnit.h
     Source/SubEngine.h
     Source/ClickEngine.h
