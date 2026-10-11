@@ -72,7 +72,9 @@ public:
         filterEnvSamplesTotal = static_cast<int>((decayTimeMs / 1000.0f) * sampleRate);
     }
 
-    float getFilterEnvOffset() {
+    // Advances the filter envelope by ONE SAMPLE and returns the cutoff
+    // offset in Hz. Must be called once per rendered sample.
+    float getNextFilterEnvOffset() {
         if (envState == EnvState::Idle) {
             return 0.0f;
         }

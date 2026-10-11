@@ -1,10 +1,27 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
+#include "Presets.h"
 
 G0GAudioProcessor::G0GAudioProcessor()
     : AudioProcessor(BusesProperties().withOutput("Output", juce::AudioChannelSet::stereo(), true)),
       apvts(*this, nullptr, "Parameters", createParameterLayout())
 {
+    params.glideTime      = apvts.getRawParameterValue("glide_time");
+    params.glideCurve     = apvts.getRawParameterValue("glide_curve");
+    params.hold           = apvts.getRawParameterValue("ahd_hold");
+    params.decay          = apvts.getRawParameterValue("ahd_decay");
+    params.decayCurve     = apvts.getRawParameterValue("decay_curve");
+    params.pitchDepth     = apvts.getRawParameterValue("pitch_depth");
+    params.pitchDecay     = apvts.getRawParameterValue("pitch_decay");
+    params.oscMorph       = apvts.getRawParameterValue("osc_morph");
+    params.clickType      = apvts.getRawParameterValue("click_type");
+    params.clickLevel     = apvts.getRawParameterValue("click_level");
+    params.driveMode      = apvts.getRawParameterValue("drive_mode");
+    params.driveGain      = apvts.getRawParameterValue("drive_gain");
+    params.cutoff         = apvts.getRawParameterValue("cutoff");
+    params.filterEnvDecay = apvts.getRawParameterValue("filter_env_decay");
+    params.filterEnvDepth = apvts.getRawParameterValue("filter_env_depth");
+    params.masterVol      = apvts.getRawParameterValue("master_volume");
 }
 
 G0GAudioProcessor::~G0GAudioProcessor() = default;
@@ -30,23 +47,29 @@ double G0GAudioProcessor::getTailLengthSeconds() const {
 }
 
 int G0GAudioProcessor::getNumPrograms() {
-    return 1;
+    return static_cast<int>(Presets::factory().size());
 }
 
 int G0GAudioProcessor::getCurrentProgram() {
-    return 0;
+    return currentProgram;
 }
 
-void G0GAudioProcessor::setCurrentProgram(int /*index*/) {}
+void G0GAudioProcessor::setCurrentProgram(int index) {
+    if (index < 0 || index >= getNumPrograms())
+        return;
+    currentProgram = index;
+    Presets::applyFactory(*this, index);
+}
 
-const juce::String G0GAudioProcessor::getProgramName(int /*index*/) {
-    return "Default";
+const juce::String G0GAudioProcessor::getProgramName(int index) {
+    if (index < 0 || index >= getNumPrograms())
+        return {};
+    return Presets::factory()[static_cast<size_t>(index)].name;
 }
 
 void G0GAudioProcessor::changeProgramName(int /*index*/, const juce::String& /*newName*/) {}
 
 void G0GAudioProcessor::prepareToPlay(double sampleRate, int samplesPerBlock) {
-    // 1. Prepare DSP components
     glideUnit.prepare(sampleRate);
     subEngine.prepare(sampleRate);
     clickEngine.prepare(sampleRate);
@@ -54,21 +77,27 @@ void G0GAudioProcessor::prepareToPlay(double sampleRate, int samplesPerBlock) {
 
     juce::dsp::ProcessSpec spec;
     spec.sampleRate = sampleRate;
-    spec.maximumBlockSize = static_cast<juce::uint32>(samplesPerBlock);
+    spec.maximumBlockSize = static_cast<juce::uint32>(juce::jmax(samplesPerBlock, kChunk));
     spec.numChannels = 2;
 
     postDriveFilter.prepare(spec);
     postDriveFilter.setType(juce::dsp::StateVariableTPTFilterType::lowpass);
 
-    // 2. Initialize parameter smoothers
+    // 2x oversampled drive (polyphase half-band IIR, low latency).
+    oversampling = std::make_unique<juce::dsp::Oversampling<float>>(
+        2, 1, juce::dsp::Oversampling<float>::filterHalfBandPolyphaseIIR, true, false);
+    oversampling->initProcessing(static_cast<size_t>(kChunk));
+    setLatencySamples(juce::roundToInt(oversampling->getLatencyInSamples()));
+
     smoothedMasterVol.reset(sampleRate, 0.05);
     smoothedCutoff.reset(sampleRate, 0.05);
     smoothedDrive.reset(sampleRate, 0.05);
     smoothedClickLevel.reset(sampleRate, 0.05);
+    smoothersPrimed = false;
+    bendSmoothed = 0.0f;
 }
 
 void G0GAudioProcessor::releaseResources() {
-    // Clear heavy resources here if any
 }
 
 bool G0GAudioProcessor::isBusesLayoutSupported(const BusesLayout& layouts) const {
@@ -78,113 +107,120 @@ bool G0GAudioProcessor::isBusesLayoutSupported(const BusesLayout& layouts) const
 
 void G0GAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midiMessages) {
     juce::ScopedNoDenormals noDenormals;
-    int numSamples = buffer.getNumSamples();
+    const int numSamples = buffer.getNumSamples();
 
-    // 1. Clear input buffer (synthesis generates audio)
     buffer.clear();
 
-    // 2. Feed GUI keyboard midi events to DAWs
+    // On-screen keyboard events join the host's MIDI.
     keyboardState.processNextMidiBuffer(midiMessages, 0, numSamples, true);
 
-    // 3. Load dynamic parameters
-    float glideMs = apvts.getRawParameterValue("glide_time")->load();
-    glideUnit.setGlideTime(glideMs);
-    
-    float glideCurve = apvts.getRawParameterValue("glide_curve")->load();
-    glideUnit.setGlideCurve(glideCurve);
+    // Parameters, read once per block (cached handles, no string lookups).
+    glideUnit.setGlideTime(params.glideTime->load());
+    glideUnit.setGlideCurve(params.glideCurve->load());
+    subEngine.setHoldTime(params.hold->load());
+    subEngine.setDecayTime(params.decay->load());
+    subEngine.setPitchParams(params.pitchDepth->load(), params.pitchDecay->load());
+    subEngine.setOscMorph(params.oscMorph->load());
+    subEngine.setDecayShape(params.decayCurve->load());
+    subEngine.setFilterEnvParams(params.filterEnvDepth->load(), params.filterEnvDecay->load());
 
-    float holdMs = apvts.getRawParameterValue("ahd_hold")->load();
-    subEngine.setHoldTime(holdMs);
+    const int clickTypeVal = static_cast<int>(params.clickType->load());
+    const auto driveMode = static_cast<SaturationCore::Mode>(static_cast<int>(params.driveMode->load()));
 
-    float decayMs = apvts.getRawParameterValue("ahd_decay")->load();
-    subEngine.setDecayTime(decayMs);
-
-    float pitchDepth = apvts.getRawParameterValue("pitch_depth")->load();
-    float pitchDecayMs = apvts.getRawParameterValue("pitch_decay")->load();
-    subEngine.setPitchParams(pitchDepth, pitchDecayMs);
-
-    float oscMorph = apvts.getRawParameterValue("osc_morph")->load();
-    subEngine.setOscMorph(oscMorph);
-
-    float decayShape = apvts.getRawParameterValue("decay_curve")->load();
-    subEngine.setDecayShape(decayShape);
-
-    float filterEnvDepth = apvts.getRawParameterValue("filter_env_depth")->load();
-    float filterEnvDecayMs = apvts.getRawParameterValue("filter_env_decay")->load();
-    subEngine.setFilterEnvParams(filterEnvDepth, filterEnvDecayMs);
-
-    int clickTypeVal = static_cast<int>(apvts.getRawParameterValue("click_type")->load());
-    auto driveMode = static_cast<SaturationCore::Mode>(static_cast<int>(apvts.getRawParameterValue("drive_mode")->load()));
-
-    smoothedMasterVol.setTargetValue(juce::Decibels::decibelsToGain(apvts.getRawParameterValue("master_volume")->load()));
-    smoothedCutoff.setTargetValue(apvts.getRawParameterValue("cutoff")->load());
-    smoothedDrive.setTargetValue(apvts.getRawParameterValue("drive_gain")->load());
-    smoothedClickLevel.setTargetValue(apvts.getRawParameterValue("click_level")->load());
-
-    // 4. Parse Midi events in the current block
-    for (const auto metadata : midiMessages) {
-        auto msg = metadata.getMessage();
-        if (msg.isNoteOn()) {
-            float velocity = msg.getVelocity();
-            glideUnit.noteOn(msg.getNoteNumber(), velocity);
-            subEngine.trigger(velocity);
-            clickEngine.trigger(clickTypeVal);
-        } else if (msg.isNoteOff()) {
-            glideUnit.noteOff(msg.getNoteNumber());
-            // Only release amplitude envelope if no notes are held down
-            if (!glideUnit.isAnyNoteHeld()) {
-                subEngine.release();
-            }
-        }
-    }
-
-    // 5. Generate audio samples
-    float* leftChannel = buffer.getWritePointer(0);
-    float* rightChannel = buffer.getWritePointer(1);
-
-    for (int i = 0; i < numSamples; ++i) {
-        // Track the frequency slide
-        float freq = glideUnit.getNextFrequency();
-        
-        // Generate sub signal
-        float subSample = subEngine.getNextSample(freq);
-        
-        // Generate transient knock
-        float clickSample = clickEngine.getNextSample() * smoothedClickLevel.getNextValue();
-
-        // Sum monophonic voice
-        float summed = subSample + clickSample;
-
-        leftChannel[i] = summed;
-        rightChannel[i] = summed;
-    }
-
-    // 6. Apply waveshaping saturation
-    float drive = smoothedDrive.getCurrentValue();
-    smoothedDrive.skip(numSamples);
-    saturationCore.process(leftChannel, rightChannel, numSamples, driveMode, drive);
-
-    // 7. Apply Post-Drive Lowpass filter
-    float baseCutoff = smoothedCutoff.getCurrentValue();
-    smoothedCutoff.skip(numSamples);
-    
-    float filterEnvOffset = subEngine.getFilterEnvOffset();
-    float modulatedCutoff = baseCutoff + filterEnvOffset;
-    postDriveFilter.setCutoffFrequency(juce::jlimit(20.0f, 20000.0f, modulatedCutoff));
-    
-    juce::dsp::AudioBlock<float> block(buffer);
-    juce::dsp::ProcessContextReplacing<float> context(block);
-    postDriveFilter.process(context);
-
-    // 8. Apply Master Volume Gain with smoothing
-    if (smoothedMasterVol.isSmoothing()) {
-        float startGain = smoothedMasterVol.getCurrentValue();
-        smoothedMasterVol.skip(numSamples);
-        float endGain = smoothedMasterVol.getCurrentValue();
-        buffer.applyGainRamp(0, 0, numSamples, startGain, endGain);
-        buffer.applyGainRamp(1, 0, numSamples, startGain, endGain);
+    const float masterTarget = juce::Decibels::decibelsToGain(params.masterVol->load());
+    if (!smoothersPrimed) {
+        // First block: start at the stored values instead of ramping from 0.
+        smoothedMasterVol.setCurrentAndTargetValue(masterTarget);
+        smoothedCutoff.setCurrentAndTargetValue(params.cutoff->load());
+        smoothedDrive.setCurrentAndTargetValue(params.driveGain->load());
+        smoothedClickLevel.setCurrentAndTargetValue(params.clickLevel->load());
+        smoothersPrimed = true;
     } else {
-        buffer.applyGain(smoothedMasterVol.getTargetValue());
+        smoothedMasterVol.setTargetValue(masterTarget);
+        smoothedCutoff.setTargetValue(params.cutoff->load());
+        smoothedDrive.setTargetValue(params.driveGain->load());
+        smoothedClickLevel.setTargetValue(params.clickLevel->load());
+    }
+
+    float* left = buffer.getWritePointer(0);
+    float* right = buffer.getWritePointer(1);
+
+    auto midiIt = midiMessages.begin();
+    const auto midiEnd = midiMessages.end();
+    float filterEnv[kChunk];
+
+    // Work in short chunks: MIDI is applied at its exact sample position,
+    // and the drive / filter / gain stages update their controls per chunk.
+    for (int chunkStart = 0; chunkStart < numSamples; chunkStart += kChunk) {
+        const int n = juce::jmin(kChunk, numSamples - chunkStart);
+
+        for (int j = 0; j < n; ++j) {
+            const int pos = chunkStart + j;
+
+            // Apply every event scheduled at or before this sample.
+            while (midiIt != midiEnd && (*midiIt).samplePosition <= pos) {
+                const auto msg = (*midiIt).getMessage();
+                if (msg.isNoteOn()) {
+                    glideUnit.noteOn(msg.getNoteNumber(), msg.getFloatVelocity());
+                    subEngine.trigger(msg.getFloatVelocity());
+                    clickEngine.trigger(clickTypeVal);
+                } else if (msg.isNoteOff()) {
+                    glideUnit.noteOff(msg.getNoteNumber());
+                    // Only release the amplitude envelope once all keys are up.
+                    if (!glideUnit.isAnyNoteHeld())
+                        subEngine.release();
+                } else if (msg.isPitchWheel()) {
+                    pitchBend.store(static_cast<float>(msg.getPitchWheelValue() - 8192) / 8192.0f);
+                } else if (msg.isController() && msg.getControllerNumber() == 1) {
+                    modWheel.store(static_cast<float>(msg.getControllerValue()) / 127.0f);
+                } else if (msg.isAllNotesOff() || msg.isAllSoundOff()) {
+                    glideUnit.reset();
+                    subEngine.release();
+                }
+                ++midiIt;
+            }
+
+            // Pitch bend: +/-2 semitones, one-pole smoothed against zipper noise.
+            bendSmoothed += (pitchBend.load() - bendSmoothed) * 0.005f;
+            const float bendRatio = std::exp2(bendSmoothed * 2.0f / 12.0f);
+
+            const float freq = glideUnit.getNextFrequency() * bendRatio;
+            const float subSample = subEngine.getNextSample(freq);
+            const float clickSample = clickEngine.getNextSample() * smoothedClickLevel.getNextValue();
+            filterEnv[j] = subEngine.getNextFilterEnvOffset();
+
+            const float summed = subSample + clickSample;
+            left[chunkStart + j] = summed;
+            right[chunkStart + j] = summed;
+        }
+
+        // Saturation, oversampled 2x. Skipped when it would do nothing.
+        const float drive = smoothedDrive.skip(n);
+        if (driveMode != SaturationCore::Mode::Bypass && drive > 1.001f) {
+            float* chans[2] = { left + chunkStart, right + chunkStart };
+            juce::dsp::AudioBlock<float> chunkBlock(chans, 2, static_cast<size_t>(n));
+            auto upBlock = oversampling->processSamplesUp(chunkBlock);
+            saturationCore.process(upBlock.getChannelPointer(0), upBlock.getChannelPointer(1),
+                                   static_cast<int>(upBlock.getNumSamples()), driveMode, drive);
+            oversampling->processSamplesDown(chunkBlock);
+        }
+
+        // Post-drive low-pass: cutoff = base + envelope + mod wheel, per sample.
+        const float baseCutoff = smoothedCutoff.skip(n);
+        const float wheelOffset = modWheel.load() * 4000.0f;
+        for (int j = 0; j < n; ++j) {
+            const float cut = juce::jlimit(20.0f, 20000.0f, baseCutoff + filterEnv[j] + wheelOffset);
+            postDriveFilter.setCutoffFrequency(cut);
+            left[chunkStart + j] = postDriveFilter.processSample(0, left[chunkStart + j]);
+            right[chunkStart + j] = postDriveFilter.processSample(1, right[chunkStart + j]);
+        }
+
+        // Master volume with smoothing.
+        for (int j = 0; j < n; ++j) {
+            const float g = smoothedMasterVol.getNextValue();
+            left[chunkStart + j] *= g;
+            right[chunkStart + j] *= g;
+        }
     }
 }
 

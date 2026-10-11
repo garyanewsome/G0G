@@ -55,3 +55,7 @@ Builds/
 # OS files
 .DS_Store
 Thumbs.db
+
+# Local CMake build dirs and installer output
+cmake-build*/
+dist/

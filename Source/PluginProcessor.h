@@ -52,11 +52,44 @@ public:
     int getActiveMidiNote() const { return glideUnit.getActiveMidiNote(); }
     float getGlideFrequency() const { return glideUnit.getCurrentFrequency(); }
 
+    // Performance controls, written by MIDI on the audio thread and by the
+    // on-screen wheels on the message thread.
+    std::atomic<float> pitchBend { 0.0f };   // -1..1 (+/-2 semitones)
+    std::atomic<float> modWheel  { 0.0f };   // 0..1  (opens the filter)
+
     juce::AudioProcessorValueTreeState apvts;
     juce::MidiKeyboardState keyboardState;
 
 private:
+    static constexpr int kChunk = 64;   // samples per control-update chunk
+
     juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
+
+    // Cached parameter handles so the audio thread never does string lookups.
+    struct ParamPtrs {
+        std::atomic<float>* glideTime = nullptr;
+        std::atomic<float>* glideCurve = nullptr;
+        std::atomic<float>* hold = nullptr;
+        std::atomic<float>* decay = nullptr;
+        std::atomic<float>* decayCurve = nullptr;
+        std::atomic<float>* pitchDepth = nullptr;
+        std::atomic<float>* pitchDecay = nullptr;
+        std::atomic<float>* oscMorph = nullptr;
+        std::atomic<float>* clickType = nullptr;
+        std::atomic<float>* clickLevel = nullptr;
+        std::atomic<float>* driveMode = nullptr;
+        std::atomic<float>* driveGain = nullptr;
+        std::atomic<float>* cutoff = nullptr;
+        std::atomic<float>* filterEnvDecay = nullptr;
+        std::atomic<float>* filterEnvDepth = nullptr;
+        std::atomic<float>* masterVol = nullptr;
+    } params;
+
+    // Drive runs oversampled to keep clip/foldback aliasing out of the audio.
+    std::unique_ptr<juce::dsp::Oversampling<float>> oversampling;
+    bool smoothersPrimed = false;
+    float bendSmoothed = 0.0f;
+    int currentProgram = 0;
 
     // DSP Core Elements
     GlideUnit glideUnit;
