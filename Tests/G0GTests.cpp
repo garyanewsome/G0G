@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "PluginProcessor.h"
+#include "GlideUnit.h"
 
 namespace {
 
@@ -209,6 +210,36 @@ int main() {
             p->processBlock(*std::make_unique<juce::AudioBuffer<float>>(2, 64), *std::make_unique<juce::MidiBuffer>());
         }
         check(all, "every factory preset is finite and audible");
+    }
+
+    {
+        std::cout << "[9] Glide moves evenly in pitch, not in Hz\n";
+        GlideUnit g;
+        g.prepare(sr);
+        g.setGlideTime(200.0f);
+        g.setGlideCurve(0.0f);           // linear
+        g.noteOn(36, 1.0f);              // 65.41 Hz
+        g.getNextFrequency();
+        g.noteOn(48, 1.0f);              // 130.81 Hz, one octave up
+        float f = 0.0f, prev = 0.0f; bool monotonic = true;
+        const int half = (int) (0.1 * sr);
+        for (int i = 0; i < half; ++i) { f = g.getNextFrequency(); monotonic &= (f >= prev - 1e-3f); prev = f; }
+        const double semitones = 12.0 * std::log2(f / 65.406);
+        check(std::abs(semitones - 6.0) < 0.15,
+              "halfway through a 1-octave slide is +6.0 semitones (got +" + juce::String(semitones, 2)
+                  + "; a Hz-linear slide would be +6.9)");
+        check(monotonic, "slide rises monotonically");
+        float last = f;
+        for (int i = 0; i < (int) (0.15 * sr); ++i) last = g.getNextFrequency();
+        check(std::abs(last - 130.813f) < 0.01f, "lands exactly on the target (" + juce::String(last, 3) + " Hz)");
+
+        // Exponential curve must also land exactly (it used to stop 0.7% short).
+        GlideUnit e;
+        e.prepare(sr); e.setGlideTime(100.0f); e.setGlideCurve(1.0f);
+        e.noteOn(40, 1.0f); e.getNextFrequency(); e.noteOn(28, 1.0f);
+        float el = 0.0f;
+        for (int i = 0; i < (int) (0.2 * sr); ++i) el = e.getNextFrequency();
+        check(std::abs(el - 41.203f) < 0.01f, "exponential curve lands exactly (" + juce::String(el, 3) + " Hz)");
     }
 
     {

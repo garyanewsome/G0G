@@ -87,21 +87,30 @@ public:
         glideCurve = juce::jlimit(0.0f, 1.0f, curve);
     }
 
+    // Glide is interpolated in pitch (log-frequency), so a slide covers equal
+    // musical distance in equal time. Interpolating in Hz would sweep fast
+    // through the low notes and crawl through the high ones.
     float getNextFrequency() {
-        if (isGliding && glideSamplesTotal > 0.0f) {
+        if (isGliding && glideSamplesTotal > 0.0f && sourceFrequency > 0.0f && targetFrequency > 0.0f) {
             glideSamplesElapsed += 1.0f;
             float ratio = glideSamplesElapsed / glideSamplesTotal;
             if (ratio >= 1.0f) {
                 currentFrequency = targetFrequency;
                 isGliding = false;
             } else {
-                // Interpolate curve factor: 0.0 = Linear, 1.0 = Exponential
-                float expFactor = std::exp(-5.0f * ratio);
+                // Remaining distance, 1 -> 0. Curve: 0.0 = linear, 1.0 = exponential.
+                // The exponential is normalised so it lands exactly on the target.
+                constexpr float k = 5.0f;
+                const float expFloor = std::exp(-k);
+                float expFactor = (std::exp(-k * ratio) - expFloor) / (1.0f - expFloor);
                 float linFactor = 1.0f - ratio;
                 float factor = (1.0f - glideCurve) * linFactor + glideCurve * expFactor;
-                currentFrequency = targetFrequency + (sourceFrequency - targetFrequency) * factor;
+
+                const float octavesToGo = std::log2(sourceFrequency / targetFrequency);
+                currentFrequency = targetFrequency * std::exp2(octavesToGo * factor);
             }
         } else {
+            if (isGliding) isGliding = false;
             currentFrequency = targetFrequency;
         }
         return currentFrequency;
