@@ -454,6 +454,61 @@ int main(int argc, char** argv) {
     }
 
     {
+        std::cout << "[14] Fuzz: random and extreme parameter combinations never crash or go non-finite\n";
+        juce::Random rng(12345);
+        bool allFinite = true;
+        for (int round = 0; round < 60; ++round) {
+            auto p = makeProcessor(round % 3 == 0 ? 64 : (round % 3 == 1 ? 512 : 1024));
+            for (auto* prm : p->getParameters()) {
+                if (auto* r = dynamic_cast<juce::RangedAudioParameter*>(prm)) {
+                    const int mode = rng.nextInt(3);
+                    r->setValueNotifyingHost(mode == 0 ? 0.0f : (mode == 1 ? 1.0f : rng.nextFloat()));
+                }
+            }
+            std::vector<Event> ev;
+            for (int t = 0; t < 48000; t += 7000 + rng.nextInt(5000))
+                ev.push_back({ t, juce::MidiMessage::noteOn(1, 24 + rng.nextInt(60), 0.2f + 0.8f * rng.nextFloat()) });
+            ev.push_back({ 20000, juce::MidiMessage::pitchWheel(1, rng.nextInt(16384)) });
+            ev.push_back({ 30000, juce::MidiMessage::controllerEvent(1, 1, rng.nextInt(128)) });
+            auto out = render(*p, 48000, p->getBlockSize(), ev);
+            for (float v : out) allFinite &= std::isfinite(v) && std::abs(v) <= 1.0001f;
+        }
+        check(allFinite, "60 random parameter sets x notes + wheels: finite and within full scale");
+    }
+
+    {
+        std::cout << "[15] Host-style lifecycle: restore state before prepare, process, open and close the editor\n";
+        bool ok = true;
+        for (int round = 0; round < 6; ++round) {
+            G0GAudioProcessor a;
+            a.setPlayConfigDetails(0, 2, 48000.0, 512);
+            a.prepareToPlay(48000.0, 512);
+            for (auto* prm : a.getParameters())
+                if (auto* r = dynamic_cast<juce::RangedAudioParameter*>(prm))
+                    r->setValueNotifyingHost(r->getDefaultValue() < 0.5f ? 1.0f : 0.0f);
+            juce::AudioBuffer<float> buf(2, 512);
+            juce::MidiBuffer midi;
+            midi.addEvent(juce::MidiMessage::noteOn(1, 36, 1.0f), 0);
+            for (int i = 0; i < 6; ++i) { a.processBlock(buf, midi); midi.clear(); }
+            juce::MemoryBlock blob;
+            a.getStateInformation(blob);
+
+            G0GAudioProcessor b;                                   // new session: restore first, prepare later
+            b.setPlayConfigDetails(0, 2, 48000.0, 512);
+            b.setStateInformation(blob.getData(), (int) blob.getSize());
+            b.prepareToPlay(48000.0, 512);
+            for (int i = 0; i < 6; ++i) { juce::MidiBuffer m; b.processBlock(buf, m); }
+
+            std::unique_ptr<juce::AudioProcessorEditor> ed(b.createEditor());   // the window opens
+            ok &= ed != nullptr;
+            ed.reset();                                                          // ...and is hidden
+            std::unique_ptr<juce::AudioProcessorEditor> ed2(b.createEditor());  // ...and reopened
+            ok &= ed2 != nullptr;
+        }
+        check(ok, "lifecycle completes with no memory errors (run under AddressSanitizer)");
+    }
+
+    {
         std::cout << "[8] CPU cost (informational, one core, this machine)\n";
         auto measure = [&](float mode, float gain, const char* label) {
             auto p = makeProcessor(256);
