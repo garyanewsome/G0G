@@ -108,7 +108,7 @@ cat > "$WORK/distribution.xml" <<XML
   <options customize="never" require-scripts="false" hostArchitectures="x86_64,arm64"/>
   <domains enable_localSystem="true"/>
   <volume-check>
-    <allowed-os-versions><os-version min="14.0"/></allowed-os-versions>
+    <allowed-os-versions><os-version min="13.0"/></allowed-os-versions>
   </volume-check>
   <choices-outline><line choice="default"><line choice="$PKG_ID"/></line></choices-outline>
   <choice id="default"/>

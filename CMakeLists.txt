@@ -7,7 +7,10 @@ if(APPLE AND NOT CMAKE_OSX_ARCHITECTURES)
     set(CMAKE_OSX_ARCHITECTURES "x86_64;arm64" CACHE STRING "Build architectures for macOS" FORCE)
 endif()
 
-project(G0G VERSION 1.1.1 LANGUAGES C CXX OBJC OBJCXX)
+# Oldest macOS we support (Ventura 13.x). Must be set before project().
+set(CMAKE_OSX_DEPLOYMENT_TARGET "13.0" CACHE STRING "Target macOS deployment version" FORCE)
+
+project(G0G VERSION 1.1.2 LANGUAGES C CXX OBJC OBJCXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -30,7 +33,7 @@ FetchContent_MakeAvailable(JUCE)
 
 # Add the G0G audio plugin target
 juce_add_plugin(G0G
-    VERSION "1.1.1"
+    VERSION "1.1.2"
     COMPANY_NAME "Gary A. Newsome"
     COMPANY_COPYRIGHT "Gary A. Newsome"
     BUNDLE_ID "com.garyanewsome.G0G"

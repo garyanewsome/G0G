@@ -134,4 +134,4 @@ Developer ID signing and notarization switch on via environment variables
 ## Compilation Requirements
 * **C++ Standard:** C++17 or higher
 * **Framework:** JUCE 8.0.4 (fetched by CMake)
-* **Targets:** VST3, AU, Standalone; universal macOS binary (Intel + Apple Silicon), macOS 14+
+* **Targets:** VST3, AU, Standalone; universal macOS binary (Intel + Apple Silicon), macOS 13+

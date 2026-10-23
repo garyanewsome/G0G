@@ -99,4 +99,4 @@ jobs:
             you to approve it once - the steps are in *READ ME FIRST.txt* inside the disk image.
             The `.zip` is the raw VST3 / AU / Standalone bundles for manual installs.
 
-            Requires macOS 14 or newer. Universal: Intel and Apple Silicon.
+            Requires macOS 13 (Ventura) or newer. Universal: Intel and Apple Silicon.

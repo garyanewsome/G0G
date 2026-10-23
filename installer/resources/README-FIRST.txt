@@ -17,7 +17,7 @@ IF MACOS SAYS IT CAN'T BE OPENED
        Click "Open Anyway" and enter your Mac password.
     3. Double-click "Install @PRODUCT@.pkg" again and click Open.
 
-  (On macOS 14 you can instead right-click the file, choose Open, then
+  (On macOS 13 and 14 you can instead right-click the file, choose Open, then
   click Open.)
 
   The same applies to "Uninstall @PRODUCT@".
@@ -33,4 +33,4 @@ REMOVE
   can be deleted by hand if you want them gone too.
 
 REQUIREMENTS
-  macOS 14 (Sonoma) or newer. Works on Intel and Apple Silicon Macs.
+  macOS 13 (Ventura) or newer. Works on Intel and Apple Silicon Macs.
